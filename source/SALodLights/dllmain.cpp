@@ -2,6 +2,7 @@
 #include "stdafx.h"
 #include <ranges>
 #include <deque>
+#include "ProceduralRecovery.hpp"
 
 import ComVars;
 import LamppostInfo;
@@ -98,6 +99,29 @@ namespace CFileLoader
     }
 }
 
+namespace ProceduralRecoveryDef {
+    SafetyHookInline shAddObject = {};
+
+    static_assert(sizeof(ProceduralRecovery::ObjectEntry) == 0x14);
+    static_assert(offsetof(ProceduralRecovery::ObjectEntry, object) == 0x8);
+    static_assert(sizeof(ProceduralRecovery::ObjectList) == 0xC);
+    static_assert(offsetof(ProceduralRecovery::SurfaceInfo, objects) == 0x3C);
+    static_assert(sizeof(ProceduralRecovery::SurfaceInfo) == 0x48);
+    static_assert(sizeof(RwV3d) == 0xC);
+
+    ProceduralRecovery::ObjectEntry* __fastcall AddObject(
+        ProceduralRecovery::SurfaceInfo* surface, void*, RwV3d position, RwV3d normal, uint8_t lighting)
+    {
+        // ProcObjectMan::m_ObjectsList. Works with vanilla storage and OLA's
+        // additional entries because both use this same free list.
+        auto& unused = *reinterpret_cast<ProceduralRecovery::ObjectList*>(0xBBC8B8);
+        ProceduralRecovery::AllocationSnapshot before(unused);
+        auto* result = shAddObject.unsafe_thiscall<ProceduralRecovery::ObjectEntry*>(surface, position, normal, lighting);
+        if (!result) before.RecoverFailure(unused, *surface);
+        return result;
+    }
+}
+
 float fSunSizeMult1 = 2.7335f;
 float fSunSizeMult2 = 6.0f;
 void DrawDistanceChanger()
@@ -148,6 +172,10 @@ void DrawDistanceChanger()
 
 void ApplyMemoryPatches()
 {
+    // Return tracking entries lost when procedural creation fails. Hooking the
+    // function covers scattered and grid placement, independently of distances.
+    ProceduralRecoveryDef::shAddObject = safetyhook::create_inline(0x5A32D0, ProceduralRecoveryDef::AddObject);
+
     auto pattern = hook::pattern("68 ? ? ? ? E8 ? ? ? ? 68 ? ? ? ? E8 ? ? ? ? E8");
     static auto CFileLoaderLoadLevelHook = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& regs)
     {
