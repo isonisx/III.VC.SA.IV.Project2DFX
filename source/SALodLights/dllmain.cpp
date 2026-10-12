@@ -364,7 +364,7 @@ void ApplyMemoryPatches()
                     {
                         if (fVegetationDrawDistance <= 10.0f)
                             drawDist *= fVegetationDrawDistance;
-                        else
+                        else if (fVegetationDrawDistance > drawDist)
                             drawDist = fVegetationDrawDistance;
 
                         if (drawDist > fMaxDrawDistanceForNormalObjects)
@@ -393,7 +393,7 @@ void ApplyMemoryPatches()
                         {
                             if (fGenericObjectsDrawDistance <= 10.0f)
                                 drawDist *= fGenericObjectsDrawDistance;
-                            else
+                            else if (fGenericObjectsDrawDistance > drawDist)
                                 drawDist = fGenericObjectsDrawDistance;
                         }
                         else
@@ -402,7 +402,7 @@ void ApplyMemoryPatches()
                             {
                                 if (fAllNormalObjectsDrawDistance <= 10.0f)
                                     drawDist *= fAllNormalObjectsDrawDistance;
-                                else
+                                else if (fAllNormalObjectsDrawDistance > drawDist)
                                     drawDist = fAllNormalObjectsDrawDistance;
                             }
                         }
@@ -413,7 +413,7 @@ void ApplyMemoryPatches()
                         {
                             if (fAllNormalObjectsDrawDistance <= 10.0f)
                                 drawDist *= fAllNormalObjectsDrawDistance;
-                            else
+                            else if (fAllNormalObjectsDrawDistance > drawDist)
                                 drawDist = fAllNormalObjectsDrawDistance;
                         }
                     }
