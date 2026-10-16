@@ -389,18 +389,13 @@ void __cdecl AddTrace(CVector* start, CVector* end)
 void DrawDistanceFMUL(SafetyHookContext& ctx)
 {
     float f = fDrawDistance;
-    _asm {fmul dword ptr[f]}
+    asm volatile("fmuls %0" : : "m"(f));
 }
-
-#define BUFFERED_SPRITES_LIMIT 2048
 
 __declspec (naked) void CmpSpriteBufferIndexHook()
 {
-    __asm
-    {
-        cmp ds : [0x649A80] , BUFFERED_SPRITES_LIMIT
-        ret
-    }
+    // Compare against the expanded 2048-sprite buffer, preserving the flags.
+    asm volatile("cmpl $2048, 0x649A80\n\tret");
 }
 
 void ApplyMemoryPatches()

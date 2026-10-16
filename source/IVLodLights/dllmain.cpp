@@ -219,7 +219,7 @@ void RegisterLODLights()
         float determinant = a - c;
         float x = (b - d) / determinant;
         float y = (a * d - b * c) / determinant;
-        return min(x * value + y, d);
+        return std::min(x * value + y, d);
     };
 
     if (m_bCatchLamppostsNow)
@@ -289,7 +289,7 @@ void RegisterLODLights()
             SolveEqSys(fCoronaDist, 0.0f, lamppost.fObjectDrawDistance, 3.5f, distance);
 
         if (bSlightlyIncreaseRadiusWithDistance)
-            fRadius *= min(SolveEqSys(fCoronaDist, 1.0f, 9000.0, 4.0f, distance), 3.0f);
+            fRadius *= std::min(SolveEqSys(fCoronaDist, 1.0f, 9000.0, 4.0f, distance), 3.0f);
 
         float fAlphaDistMult = 110.0f - SolveEqSys(fCoronaDist / 4.0f, 10.0f, lamppost.fObjectDrawDistance * 4.0f, 100.0f, distance);
 
@@ -348,8 +348,8 @@ void RegisterLODLights()
 
             // Determine orientation based on heading
             float heading = lamppost.fHeading;
-            bool isFacingEastWest = (heading >= -5.0f * M_PI / 6.0f && heading <= -M_PI / 6.0f) ||
-                (heading >= M_PI / 6.0f && heading <= 5.0f * M_PI / 6.0f);
+            bool isFacingEastWest = (heading >= -5.0f * std::numbers::pi / 6.0f && heading <= -std::numbers::pi / 6.0f) ||
+                (heading >= std::numbers::pi / 6.0f && heading <= 5.0f * std::numbers::pi / 6.0f);
 
             // Swap phases for E/W traffic lights
             bool redPhase = isRedTime;
