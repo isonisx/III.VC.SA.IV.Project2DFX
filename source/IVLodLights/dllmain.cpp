@@ -387,8 +387,8 @@ void RegisterLODLights()
 
             // East-west lights have the opposite phase
             float heading = lamppost.fHeading;
-            bool isFacingEastWest = (heading >= -5.0f * float(M_PI) / 6.0f && heading <= -float(M_PI) / 6.0f) ||
-                (heading >= float(M_PI) / 6.0f && heading <= 5.0f * float(M_PI) / 6.0f);
+            bool isFacingEastWest = (heading >= -5.0f * std::numbers::pi / 6.0f && heading <= -std::numbers::pi / 6.0f) ||
+                (heading >= std::numbers::pi / 6.0f && heading <= 5.0f * std::numbers::pi / 6.0f);
 
             bool redPhase = isRedTime;
             bool greenPhase = isGreenTime;

@@ -255,6 +255,7 @@ public:
     int16_t m_txdSlot;
 
 public:
+    explicit CBaseModelInfo(ModelInfoType type) : m_type(type) {}
     uint8_t GetModelType() const { return m_type; }
     bool IsBuilding(void) { return m_type == MITYPE_SIMPLE || m_type == MITYPE_TIME; }
     bool IsSimple(void) { return m_type == MITYPE_SIMPLE || m_type == MITYPE_TIME || m_type == MITYPE_WEAPON; }

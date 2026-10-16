@@ -349,7 +349,7 @@ void __cdecl AddTrace(CVector* start, CVector* end, float thickness, uint32_t li
 void DrawDistanceFMUL(SafetyHookContext& ctx)
 {
     float f = fDrawDistance;
-    _asm {fmul dword ptr[f]}
+    asm volatile("fmuls %0" : : "m"(f));
 }
 
 void ApplyMemoryPatches()

@@ -41,10 +41,11 @@ export struct RxObjSpace3dVertex	// sizeof = 0x24
 
 export enum
 {
-    PHYSICAL_MAX_COLLISIONRECORDS = 6
+    OBJECT_PHYSICAL_MAX_COLLISIONRECORDS = 6
 };
 
-export class CPhysical : public CEntity
+// This object view has a different layout from the vehicle Physical module.
+export class CObjectPhysical : public CEntity
 {
 public:
     int32_t m_audioEntityId;
@@ -71,7 +72,7 @@ public:
     uint8_t m_nStaticFrames;
     uint8_t m_nCollisionRecords;
     bool m_bIsVehicleBeingShifted;
-    CEntity* m_aCollisionRecords[PHYSICAL_MAX_COLLISIONRECORDS];
+    CEntity* m_aCollisionRecords[OBJECT_PHYSICAL_MAX_COLLISIONRECORDS];
 
     float m_fDistanceTravelled;
 
@@ -93,8 +94,8 @@ public:
     uint8_t m_nSurfaceTouched;
     int8_t m_nZoneLevel;
 
-    CPhysical(void);
-    ~CPhysical(void);
+    CObjectPhysical(void);
+    ~CObjectPhysical(void);
 
     // from CEntity
     void Add(void);
@@ -112,7 +113,7 @@ public:
     void AddCollisionRecord_Treadable(CEntity* ent);
     bool GetHasCollidedWith(CEntity* ent);
     void RemoveRefsToEntity(CEntity* ent);
-    static void PlacePhysicalRelativeToOtherPhysical(CPhysical* other, CPhysical* phys, CVector localPos);
+    static void PlacePhysicalRelativeToOtherPhysical(CObjectPhysical* other, CObjectPhysical* phys, CVector localPos);
 
     // get speed of point p relative to entity center
     CVector GetSpeed(const CVector& r)
@@ -173,7 +174,7 @@ public:
     bool m_bCameraToAvoidThisObject;
 };
 
-export class CObject : public CPhysical
+export class CObject : public CObjectPhysical
 {
 public:
     CMatrix m_objectMatrix;

@@ -384,7 +384,7 @@ export bool FindGameAddresses()
     pattern = find_pattern("8B 15 ? ? ? ? 56 8D 72 01", "A1 ? ? ? ? 56 8D 70 01 81 FE");
     if (pattern.empty())
         return false;
-    DrawCorona = pattern.get_first<int(__cdecl)(int, char, char, char, float, void*, float, float, float, int, float, char, char, int)>(0);
+    DrawCorona = pattern.get_first<std::remove_pointer_t<decltype(DrawCorona)>>(0);
 
     auto size = hook::pattern("8B 35 ? ? ? ? 85 F6 75 06 33 C0 5E C2 04 00 53 57 8B 7C 24 10").count_hint(2);
     if (size.empty())
@@ -399,7 +399,7 @@ export bool FindGameAddresses()
 
     pattern = hook::pattern("56 8B 35 ? ? ? ? 85 F6 75 06");
     if (pattern.size() >= 2)
-        Natives::getNativeAddress = pattern.get(1).get<void* (__stdcall)(uint32_t)>(0);
+        Natives::getNativeAddress = pattern.get(1).get<std::remove_pointer_t<decltype(Natives::getNativeAddress)>>(0);
 
     return true;
 }
