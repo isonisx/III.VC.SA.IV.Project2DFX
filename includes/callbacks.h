@@ -166,31 +166,31 @@ private:
         bool executed;
     };
 
-    static inline auto& GetOnModuleLoadCallbackList()
+    static inline std::map<std::wstring, std::function<void()>, Comparator>& GetOnModuleLoadCallbackList()
     {
         static std::map<std::wstring, std::function<void()>, Comparator> onModuleLoad;
         return onModuleLoad;
     }
 
-    static inline auto& GetOnModuleUnloadCallbackList()
+    static inline std::map<std::wstring, std::function<void()>, Comparator>& GetOnModuleUnloadCallbackList()
     {
         static std::map<std::wstring, std::function<void()>, Comparator> onModuleUnload;
         return onModuleUnload;
     }
 
-    static inline auto& GetOnAnyModuleLoadCallbackList()
+    static inline std::vector<std::function<void(HMODULE)>>& GetOnAnyModuleLoadCallbackList()
     {
         static std::vector<std::function<void(HMODULE)>> onAnyModuleLoad;
         return onAnyModuleLoad;
     }
 
-    static inline auto& GetOnAnyModuleUnloadCallbackList()
+    static inline std::vector<std::function<void(std::wstring_view)>>& GetOnAnyModuleUnloadCallbackList()
     {
         static std::vector<std::function<void(std::wstring_view)>> onAnyModuleUnload;
         return onAnyModuleUnload;
     }
 
-    static inline auto& GetCallbackParamsList()
+    static inline std::vector<ThreadParams>& GetCallbackParamsList()
     {
         static std::vector<ThreadParams> callbackParams;
         return callbackParams;
@@ -274,7 +274,7 @@ private:
         act.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID | ACTCTX_FLAG_HMODULE_VALID;
         act.lpSource = FullDllPath;
         act.hModule = DllBase;
-        act.lpResourceName = ISOLATIONAWARE_MANIFEST_RESOURCE_ID;
+        act.lpResourceName = MAKEINTRESOURCEW(2);
 
         // Reset pointer, crucial for x64 version
         *ActivationContext = 0;
@@ -296,7 +296,7 @@ private:
         if (LdrRegisterDllNotification)
         {
             if (!cookie)
-                LdrRegisterDllNotification(0, LdrDllNotification, 0, &cookie);
+                LdrRegisterDllNotification(0, reinterpret_cast<PVOID>(LdrDllNotification), 0, &cookie);
         }
         else
         {
@@ -314,9 +314,6 @@ private:
         if (LdrUnregisterDllNotification && cookie)
             LdrUnregisterDllNotification(cookie);
     }
-
-    template<typename Callable>
-    using ReturnType = typename decltype(std::function{ std::declval<Callable>() })::result_type;
 
     static inline SafetyHookInline shGetSystemTimeAsFileTime = {};
     static inline void WINAPI GetSystemTimeAsFileTimeHook(LPFILETIME lpSystemTimeAsFileTime)
@@ -338,7 +335,7 @@ private:
             }
         }
 
-        shGetSystemTimeAsFileTime.stdcall<ReturnType<decltype(GetSystemTimeAsFileTime)>>(lpSystemTimeAsFileTime);
+        shGetSystemTimeAsFileTime.stdcall<void>(lpSystemTimeAsFileTime);
 
         if (std::all_of(threadParams.begin(), threadParams.end(), [](const auto& params) { return params.executed; }))
             shGetSystemTimeAsFileTime = {};

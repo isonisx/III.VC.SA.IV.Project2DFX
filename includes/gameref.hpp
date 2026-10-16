@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <cstdint>
-#include "injector\injector.hpp"
+#include "injector/injector.hpp"
 
 template<typename T, bool AutoUnprotect = false>
 class GameRef

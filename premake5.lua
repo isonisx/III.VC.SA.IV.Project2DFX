@@ -1,12 +1,78 @@
-require "vstudio"
+-- macOS host (including Apple Silicon), 32-bit Windows target:
+--   brew install premake mingw-w64
+--   git submodule update --init --recursive
+--   premake5 gmake
+--   make -C build config=release -j$(sysctl -n hw.logicalcpu)
+-- Use config=debug for symbols, or append SALodLights to build only that plugin.
+-- Outputs: build/bin/<Release|Debug>/<project>/<project>.asi (or .exe).
+-- Rerun Premake after adding files, updating submodules, or editing .env; ordinary
+-- source/header/module edits are picked up by make. Clean with make -C build clean.
+-- Optional .env keys use macOS paths to a game inside a Wine/CrossOver bottle,
+-- e.g. GTA_SAN_ANDREAS_DIR="/Users/me/Games/GTA San Andreas".
+-- The Windows binaries must be run in the game (e.g. through Wine/CrossOver).
+if os.host() ~= "macosx" then
+   error("This build requires a macOS host.")
+end
+newoption { trigger = "prepare-project", value = "NAME", description = "Internal: regenerate a project's MinGW sources" }
+newaction { trigger = "prepare", description = "Internal: regenerate MinGW compatibility sources", execute = function() end }
+if _ACTION and _ACTION ~= "gmake" and _ACTION ~= "gmake2" and _ACTION ~= "prepare" then
+   error("Use premake5 gmake to generate the MinGW makefiles.")
+end
+_OPTIONS["os"] = "windows"
+if _ACTION ~= "prepare" then
+   for _, tool in ipairs({ "i686-w64-mingw32-g++", "i686-w64-mingw32-windres", "iconv" }) do
+      local _, status = os.outputof("command -v " .. tool)
+      assert(status == 0, "Missing tool on PATH: " .. tool .. ". Install premake and mingw-w64 with Homebrew.")
+   end
+end
 
--- PS2 and PSP as Visual Studio platforms of their own (as premake-consoles does for
--- consoles); their projects are Makefile ones, so no MSBuild platform files are needed.
-premake.vstudio.vs2010_architectures.ps2 = "PS2"
-premake.vstudio.vs2010_architectures.psp = "PSP"
-premake.api.addAllowed("system", { "ps2", "psp" })
+-- IniReader uses a Windows include separator. Normalize a build-local copy so
+-- the pinned submodule stays untouched on a POSIX host.
+os.mkdir("build/compat")
+local function writeChanged(filename, text)
+   if io.readfile(filename) == text then return end
+   local f = assert(io.open(filename, "wb"))
+   f:write(text)
+   f:close()
+end
+if _ACTION ~= "prepare" then
+   -- Fail visibly if a future submodule update invalidates a compatibility patch.
+   local function replace(text, pattern, replacement, expected)
+      local result, count = text:gsub(pattern, replacement)
+      assert(count == (expected or 1), "Submodule compatibility patch no longer matches: " .. pattern)
+      return result
+   end
+   local notice = "// Generated MinGW adaptation; original source and license are in external/.\n"
+   local ini = assert(io.readfile("external/IniReader/IniReader.h"), "Run git submodule update --init --recursive first")
+   ini = replace(ini, 'mINI\\src\\mini\\ini.h', 'mINI/src/mini/ini.h')
+   writeChanged("build/compat/IniReader.h", notice .. ini)
 
--- The folder a project is deployed to, and the game it is started from when debugging,
+   -- Make Facade's SFINAE depend on a function-template parameter, not just the
+   -- enclosing class. GCC otherwise rejects array field wrappers at instantiation.
+   local facade = assert(io.readfile("external/ModUtils/Facade.hpp"))
+   facade = replace(facade, 'template<typename%.%.%. Args, typename = std::enable_if_t<!std::is_array_v<T>>>',
+      'template<typename U = T, typename... Args, typename = std::enable_if_t<!std::is_array_v<U>>>', 2)
+   writeChanged("build/compat/Facade.hpp", notice .. facade)
+
+   -- windres expects UTF-8, while the original resources are UTF-16LE.
+   for _, filename in ipairs({ "VersionInfo.rc", "VersionInfo.h" }) do
+      local text, status = os.outputof('iconv -f UTF-16 -t UTF-8 "resources/' .. filename .. '"')
+      assert(status == 0 and text ~= "", "Unable to convert resources/" .. filename)
+      writeChanged("build/compat/" .. filename, text)
+   end
+
+   -- MinGW has no MSVC __try/__except. Stop scanning at unreadable regions using
+   -- page protection checks; do not substitute C++ catch for access-violation SEH.
+   local patterns = assert(io.readfile("external/hooking/Hooking.Patterns.cpp"))
+   patterns = replace(patterns, '#define NOMINMAX', '#include "PatternMemory.hpp"')
+   patterns = replace(patterns, "__try", "")
+   patterns = replace(patterns, "__except %(%(GetExceptionCode%(%) == EXCEPTION_ACCESS_VIOLATION%) %? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH%)%s*{%s*}", "")
+   patterns = replace(patterns, "for %(uintptr_t i = executable.begin%(%)", "uintptr_t readableEnd = 0;\n\t\tfor (uintptr_t i = executable.begin()")
+   patterns = replace(patterns, "uint8_t%* ptr = reinterpret_cast<uint8_t%*>%(i%);", "if (!PatternMemoryReadable(i, maskSize, readableEnd)) break;\n\t\t\tuint8_t* ptr = reinterpret_cast<uint8_t*>(i);")
+   writeChanged("build/compat/Hooking.Patterns.cpp", notice .. patterns)
+end
+
+-- The folder a project is deployed to,
 -- is the path of one machine and does not belong in the repository. It is read from a
 -- `.env` file next to this script, which is not tracked by git and holds one
 -- `<KEY>=<folder>` line per game (quotes and a trailing slash are optional). A project
@@ -31,48 +97,43 @@ function envdir(key)
    value = value:gsub("[%s\\/]+$", "")
    if value == "" then return nil end
 
-   return path.translate(value)
+   return path.getabsolute(value, _SCRIPT_DIR)
 end
 
 -- Deploys the built .asi into the script folder of the game that `key` names in the .env
--- file, and starts the game from there when debugging. Only a plugin that is already
+-- file (a macOS filesystem path). Only a plugin that is already
 -- installed in the game folder is replaced, a folder without one is left alone.
-function setpaths(key, exepath, scriptspath)
+function setpaths(key, scriptspath)
    scriptspath = scriptspath or "scripts/"
    local gamepath = envdir(key)
    if gamepath then
-      local target = gamepath .. "\\" .. path.translate(scriptspath)
+      local target = path.join(gamepath, scriptspath)
       postbuildcommands {
-         "if exist \"" .. target .. "$(TargetFileName)\" copy /y \"$(TargetPath)\" \"" .. target .. "\"",
+         'if [ -f "' .. target .. '/%{cfg.buildtarget.name}" ]; then cp -f "%{cfg.buildtarget.abspath}" "' .. target .. '/"; fi',
       }
-      debugdir (gamepath)
-      if (exepath) then
-         debugcommand (gamepath .. "\\" .. path.translate(exepath))
-      end
    end
 end
 
 workspace "III.VC.SA.IV.Project2DFX"
    configurations { "Release", "Debug" }
-   platforms { "Win32" }
+   system "windows"
+   toolset "gcc"
+   gccprefix "i686-w64-mingw32-"
    architecture "x86"
    location "build"
-   objdir ("build/obj")
-   buildlog ("build/log/%{prj.name}.log")
-   cppdialect "C++latest"
+   objdir "build/mingw-obj/%{prj.name}/%{cfg.buildcfg}"
+   cppdialect "C++23"
+   buildoptions { "-fms-extensions" }
+   linkoptions { "-static", "-static-libgcc", "-static-libstdc++" }
+   links { "psapi", "shlwapi" }
    
    kind "SharedLib"
    language "C++"
-   targetdir "data/%{prj.name}/"
+   targetdir "build/bin/%{cfg.buildcfg}/%{prj.name}"
+   targetprefix ""
    targetextension ".asi"
    characterset ("Unicode")
    staticruntime "On"
-
-   defines { "rsc_CompanyName=\"ThirteenAG\"" }
-   defines { "rsc_LegalCopyright=\"MIT License\""} 
-   defines { "rsc_InternalName=\"%{prj.name}\"", "rsc_ProductName=\"%{prj.name}\"", "rsc_OriginalFilename=\"%{cfg.buildtarget.name}\"" }
-   defines { "rsc_FileDescription=\"https://thirteenag.github.io/p2dfx\"" }
-   defines { "rsc_UpdateUrl=\"https://github.com/ThirteenAG/III.VC.SA.IV.Project2DFX\"" }
 
    local major = os.date("%d")
    local minor = os.date("%m")
@@ -91,31 +152,21 @@ workspace "III.VC.SA.IV.Project2DFX"
       productVersion = productVersion .. "-" .. githash
    end
 
-   defines { "rsc_FileVersion_MAJOR=" .. major }
-   defines { "rsc_FileVersion_MINOR=" .. minor }
-   defines { "rsc_FileVersion_BUILD=" .. build }
-   defines { "rsc_FileVersion_REVISION=" .. revision }
-   defines { "rsc_FileVersion=\"" .. major .. "." .. minor .. "." .. build .. "\"" }
-   defines { "rsc_ProductVersion=\"" .. productVersion .. "\"" }
-   defines { "rsc_GitSHA1=\"" .. githash .. "\"" }
-   defines { "rsc_GitSHA1W=L\"" .. githash .. "\"" }
-
-   defines { "_CRT_SECURE_NO_WARNINGS" }
+   defines { "_CRT_SECURE_NO_WARNINGS", "NOMINMAX", "UNICODE", "_UNICODE" }
 
    files { "source/%{prj.name}/*.h", "source/%{prj.name}/*.cpp" }
    files { "source/%{prj.name}/*.hpp", "source/%{prj.name}/*.ixx" }
    files { "source/*.hpp", "source/*.ixx" }
-   files { "resources/*.rc" }
-   files { "external/hooking/Hooking.Patterns.h", "external/hooking/Hooking.Patterns.cpp" }
+   files { "external/hooking/Hooking.Patterns.h", "build/compat/Hooking.Patterns.cpp" }
    files { "external/injector/safetyhook/include/**.hpp", "external/injector/safetyhook/src/**.cpp" }
    files { "external/injector/zydis/**.h", "external/injector/zydis/**.c" }
    files { "data/**/*.ini" }
-   includedirs { "includes" }
+   includedirs { "build/compat", "includes", "source/compat" }
    includedirs { "external/hooking" }
    includedirs { "external/injector/safetyhook/include" }
    includedirs { "external/injector/zydis" }
    includedirs { "external/injector/include" }
-   includedirs { "external/inireader" }
+   includedirs { "external/IniReader" }
    includedirs { "external/filewatch" }
    includedirs { "external/ModUtils" }
 
@@ -130,94 +181,131 @@ workspace "III.VC.SA.IV.Project2DFX"
    }
 
    filter "configurations:Debug"
-      defines "DEBUG"
+       defines { "DEBUG", "_DEBUG" }
       symbols "On"
 
    filter "configurations:Release"
-      defines "NDEBUG"
-      optimize "On"
+       defines "NDEBUG"
+       optimize "On"
+   filter {}
+
+-- GCC currently fails to merge libstdc++ declarations imported through these
+-- modules. Generate ordinary, guarded headers and one translation unit per game.
+-- The originals remain the source of truth; make regenerates on .ixx edits.
+function modules(name, shared)
+   if _OPTIONS["prepare-project"] and _OPTIONS["prepare-project"] ~= name then return end
+   local sources = os.matchfiles("source/" .. name .. "/*.ixx")
+   for _, source in ipairs(shared) do table.insert(sources, source) end
+   local names = {}
+   for _, source in ipairs(sources) do
+      local text = io.readfile(source)
+      local mod = text:match("export%s+module%s+([%w_]+)%s*;")
+      assert(mod, "Missing module declaration: " .. source)
+      names[mod] = source
+   end
+   local dir = path.getabsolute("build/compat/" .. name)
+   os.mkdir(dir)
+   local function translate(source)
+      local text = assert(io.readfile(source))
+      text = text:gsub("^\239\187\191", "")
+      local lines = {}
+      for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+         if line:match("^%s*module%s*;") or line:match("^%s*export%s+module%s+") then
+            line = ""
+         elseif line:match("^%s*export%s*$") or line:match("^%s*export%s*{") then
+            line = line:gsub("export", "inline namespace Project2DFX_" .. path.getbasename(source), 1)
+         else
+            line = line:gsub("^(%s*)export%s+", "%1")
+            line = line:gsub("^(%s*)import%s+([%w_]+)%s*;", function(indent, mod)
+               assert(names[mod], "Unknown module " .. mod .. " in " .. source)
+               return indent .. '#include "' .. dir .. '/' .. mod .. '.hpp"'
+            end)
+            line = line:gsub('^(%s*#include%s*")([^"\n]+)(")', function(prefix, include, suffix)
+               local resolved = path.join(path.getdirectory(source), include)
+               if os.isfile(resolved) then include = path.getabsolute(resolved) end
+               return prefix .. include .. suffix
+            end)
+         end
+         table.insert(lines, line)
+      end
+      return '#line 1 "' .. path.getabsolute(source) .. '"\n' .. table.concat(lines, "\n")
+   end
+   local headers = {}
+   for mod, source in pairs(names) do
+      writeChanged(dir .. '/' .. mod .. '.hpp', '#pragma once\n' .. translate(source))
+      table.insert(headers, '#include "' .. dir .. '/' .. mod .. '.hpp"\n')
+   end
+   table.sort(headers)
+   local inputs = table.join(sources, { "premake5.lua" })
+   for _, source in ipairs(os.matchfiles("source/" .. name .. "/*.cpp")) do
+      local generated = dir .. '/' .. path.getname(source)
+      writeChanged(generated, '#include <stdafx.h>\n' .. table.concat(headers) .. translate(source))
+      filter("files:" .. source)
+         buildmessage("Compiling " .. name .. " (MinGW translation unit)")
+         buildcommands {
+            '"' .. _PREMAKE_COMMAND .. '" --file="' .. path.getabsolute("premake5.lua") .. '" --prepare-project=' .. name .. ' prepare',
+            '$(CXX) $(ALL_CXXFLAGS) -MMD -MP -MF "%{cfg.objdir}/' .. path.getbasename(source) .. '.d" -c "' .. generated .. '" -o "%{cfg.objdir}/' .. path.getbasename(source) .. '.o"',
+         }
+         buildinputs(inputs)
+         buildoutputs { "%{cfg.objdir}/" .. path.getbasename(source) .. ".o" }
+         linkbuildoutputs "On"
+      filter {}
+   end
+end
 
 project "2DFXDataGrabber"
    kind "ConsoleApp"
-   targetdir "data/%{prj.name}/"
    targetextension ".exe"
    characterset ("MBCS")
+   undefines { "UNICODE", "_UNICODE" }
    removefiles { "source/*.hpp", "source/*.ixx" }
 project "IIILodLights"
-   setpaths("GTAIII_DIR", "gta3.exe")
+   modules("IIILodLights", os.matchfiles("source/*.ixx"))
+   setpaths("GTAIII_DIR")
 project "VCLodLights"
-   setpaths("GRAND_THEFT_AUTO_VICE_CITY_DIR", "gta-vc.exe")
+   modules("VCLodLights", os.matchfiles("source/*.ixx"))
+   setpaths("GRAND_THEFT_AUTO_VICE_CITY_DIR")
 project "SALodLights"
-   setpaths("GTA_SAN_ANDREAS_DIR", "gta_sa.exe")
+   modules("SALodLights", os.matchfiles("source/*.ixx"))
+   setpaths("GTA_SAN_ANDREAS_DIR")
 project "IVLodLights"
    removefiles { "source/*.hpp", "source/*.ixx" }
    files { "source/FileMgr.ixx", "source/LamppostInfo.ixx", "source/Timer.ixx" }
    -- the plugins of GTA IV are loaded from the plugins folder
-   setpaths("GTA_IV_DIR", "GTAIV.exe", "plugins/")
+   modules("IVLodLights", { "source/FileMgr.ixx", "source/LamppostInfo.ixx", "source/Timer.ixx" })
+   setpaths("GTA_IV_DIR", "plugins/")
 
--- ====================== CONSOLE SOLUTIONS ======================
--- Vice City Stories and Liberty City Stories on PCSX2F (PS2) and PPSSPP (PSP). These are
--- MIPS modules built by the SDK submodules (external/ps2sdk, external/pspsdk) from
--- source/console/<name>/module.json into data/<name>/, laid out the way they are unpacked
--- into the folder of the emulator. source/console/shared holds what they have in common.
-function ConsoleSetup(name, platform)
-   workspace (name)
-      configurations { "Release", "Debug" }
-      platforms { platform }
-      system (platform:lower())
-      bindirs { "$(PATH)" } -- unknown VS platform: keep the system PATH for the build commands
-      location "build"
-      kind "Makefile"
-      language "C++"
-      includedirs { "external/injector/include" }
-      files { "source/console/%{prj.name}/*.h", "source/console/%{prj.name}/*.hpp", "source/console/%{prj.name}/*.c",
-              "source/console/%{prj.name}/*.cpp", "source/console/%{prj.name}/module.json", "source/console/%{prj.name}/*.exp",
-              "source/console/shared/**.hpp", "data/%{prj.name}/**.ini" }
-      filter "configurations:Debug"
-         defines { "DEBUG" }
-      filter "configurations:Release"
-         defines { "NDEBUG" }
-      filter {}
-end
+-- Console projects use the Windows SDK toolchains, not MinGW. Their standalone
+-- Visual Studio entry point is premake5-consoles.lua.
 
--- Builds the module with the SDK of `sdk` into data/<name>/<output>, and copies it into the
--- folder of the emulator that `key` names in the .env file.
-function consolepaths(sdk, key, output, exepath)
-   local manifest = '"%{wks.location}/../source/console/%{prj.name}/module.json"'
-   local command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "%{wks.location}/../external/' .. sdk .. '/plugins/build-module.ps1" -Project ' .. manifest
-   if sdk == "pspsdk" then
-      command = command .. ' -Configuration "%{cfg.buildcfg}"'
+-- Put resource string macros in a source file, avoiding windres' second round of
+-- shell parsing of -D values (which otherwise loses embedded string quotes).
+for _, name in ipairs({ "2DFXDataGrabber", "IIILodLights", "VCLodLights", "SALodLights", "IVLodLights" }) do
+   project(name)
+   local ext = name == "2DFXDataGrabber" and ".exe" or ".asi"
+   local values = {
+      rsc_CompanyName = '"ThirteenAG"', rsc_LegalCopyright = '"MIT License"',
+      rsc_InternalName = '"' .. name .. '"', rsc_ProductName = '"' .. name .. '"',
+      rsc_OriginalFilename = '"' .. name .. ext .. '"',
+      rsc_FileDescription = '"https://thirteenag.github.io/p2dfx"',
+      rsc_UpdateUrl = '"https://github.com/ThirteenAG/III.VC.SA.IV.Project2DFX"',
+      rsc_FileVersion_MAJOR = tonumber(major), rsc_FileVersion_MINOR = tonumber(minor),
+      rsc_FileVersion_BUILD = tonumber(build), rsc_FileVersion_REVISION = tonumber(revision),
+      rsc_FileVersion = '"' .. major .. '.' .. minor .. '.' .. build .. '"',
+      rsc_ProductVersion = '"' .. productVersion .. '"', rsc_GitSHA1 = '"' .. githash .. '"',
+   }
+   local lines = {}
+   for key, value in pairs(values) do table.insert(lines, '#define ' .. key .. ' ' .. value .. '\n') end
+   table.sort(lines)
+   local rc = "build/compat/" .. name .. ".rc"
+   if _ACTION ~= "prepare" then
+      writeChanged(rc, table.concat(lines) .. '#include "VersionInfo.rc"\n')
    end
-   local gamepath = envdir(key)
-   local deploy = {}
-   if gamepath then
-      local target = gamepath .. "\\" .. path.translate(path.getdirectory(output))
-      deploy = { 'if not exist "' .. target .. '" mkdir "' .. target .. '"',
-         'copy /y "$(NMakeOutput)" "' .. target .. '"' }
-      debugdir (gamepath)
-      debugcommand (gamepath .. "\\" .. exepath)
-   end
-   buildcommands { command, 'if errorlevel 1 exit /b %errorlevel%', deploy }
-   rebuildcommands { command .. ' -Clean', 'if errorlevel 1 exit /b %errorlevel%', command,
-      'if errorlevel 1 exit /b %errorlevel%', deploy }
-   cleancommands { command .. ' -Clean' }
-   targetdir ("data/%{prj.name}/" .. path.getdirectory(output))
-   targetname (path.getbasename(output))
-   targetextension (path.getextension(output))
+   files { rc }
+   filter("files:" .. rc)
+      buildcommands { '$(RESCOMP) "%{file.abspath}" -I../build/compat %{cfg.buildcfg == "Debug" and "-D_DEBUG" or ""} -O coff -o "%{cfg.objdir}/VersionInfo.o"' }
+      buildinputs { "build/compat/VersionInfo.rc", "build/compat/VersionInfo.h" }
+      buildoutputs { "%{cfg.objdir}/VersionInfo.o" }
+      linkbuildoutputs "On"
+   filter {}
 end
-
-ConsoleSetup("Project2DFX.PS2", "PS2")
-   includedirs { "external/ps2sdk/ps2sdk/ee" }
-
-project "GTAVCS.PCSX2F.Project2DFX"
-   consolepaths("ps2sdk", "PCSX2F_DIR", "PLUGINS/GTAVCS.PCSX2F.Project2DFX.elf", "pcsx2-qtx64.exe")
-project "GTALCS.PCSX2F.Project2DFX"
-   consolepaths("ps2sdk", "PCSX2F_DIR", "PLUGINS/GTALCS.PCSX2F.Project2DFX.elf", "pcsx2-qtx64.exe")
-
-ConsoleSetup("Project2DFX.PSP", "PSP")
-   includedirs { "external/pspsdk/usr/local/pspdev/psp/sdk/include" }
-
-project "GTAVCS.PPSSPP.Project2DFX"
-   consolepaths("pspsdk", "PPSSPP_DIR", "memstick/PSP/PLUGINS/GTAVCS.PPSSPP.Project2DFX/GTAVCS.PPSSPP.Project2DFX.prx", "PPSSPPWindows64.exe")
-project "GTALCS.PPSSPP.Project2DFX"
-   consolepaths("pspsdk", "PPSSPP_DIR", "memstick/PSP/PLUGINS/GTALCS.PPSSPP.Project2DFX/GTALCS.PPSSPP.Project2DFX.prx", "PPSSPPWindows64.exe")
