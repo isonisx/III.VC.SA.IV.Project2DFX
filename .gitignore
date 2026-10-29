@@ -359,3 +359,6 @@ ASALocalRun/
 #Excludes
 docs/**
 tests/**
+
+# MinGW build output
+build/
