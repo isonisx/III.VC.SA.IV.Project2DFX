@@ -13,6 +13,7 @@ import ModelInfo;
 import Camera;
 import Clock;
 import Entity;
+import Placeable;
 import Sprite;
 import Misc;
 import SearchLightCone;

@@ -21,6 +21,7 @@ import Game;
 import LamppostInfo;
 import Timecycle;
 import PointLights;
+import ModelInfo;
 
 #include "LightVolumes.hpp"
 

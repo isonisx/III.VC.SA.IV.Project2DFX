@@ -1,0 +1,3 @@
+# Editor database for the original SALodLights sources. Generate with: make -C mingw clangd
+CompileFlags:
+  CompilationDatabase: build/clangd
